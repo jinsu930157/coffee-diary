@@ -1,545 +1,431 @@
-import React, { useState, useEffect, useRef } from "react";
-import { Coffee, Plus, List, Package, Download, Upload, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 
-const BEANS_KEY = "coffee_journal_beans_v1";
-const BREWS_KEY = "coffee_journal_brews_v1";
+const BEANS_KEY = "cj_beans_v2";
+const BREWS_KEY = "cj_brews_v2";
 
-// localStorage 헬퍼
-const loadData = (key) => {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    return [];
-  }
-};
-const saveData = (key, data) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(data));
-    return true;
-  } catch (e) {
-    return false;
-  }
-};
+const beanKey = (name, roastDate) => `${(name || "").trim()}__${roastDate || ""}`;
+const daysSince = (d) => d ? Math.round((Date.now() - new Date(d)) / 86400000) : null;
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState("write");
-  const [beans, setBeans] = useState(() => loadData(BEANS_KEY));
-  const [brews, setBrews] = useState(() => loadData(BREWS_KEY));
-  const [beanMode, setBeanMode] = useState(() => loadData(BEANS_KEY).length > 0 ? "existing" : "new");
-  const [selectedBeanKey, setSelectedBeanKey] = useState("");
-  const [expandedBeans, setExpandedBeans] = useState({});
-  const [saveMsg, setSaveMsg] = useState({ text: "", type: "" });
-  const fileInputRef = useRef(null);
+const CoffeeCupIcon = ({ size = 48 }) => (
+  <svg width={size} height={size} viewBox="0 0 56 56" fill="none">
+    <ellipse cx="28" cy="46" rx="18" ry="2.5" fill="#D3C4A8" opacity="0.5"/>
+    <path d="M12 20 L12 37 Q12 44 20 44 L34 44 Q42 44 42 37 L42 20 Z" stroke="#7C6A52" strokeWidth="1.5" strokeLinejoin="round" fill="#FFFDF8"/>
+    <path d="M42 25 Q51 25 51 31 Q51 37 42 37" stroke="#7C6A52" strokeWidth="1.5" strokeLinecap="round"/>
+    <line x1="12" y1="20" x2="42" y2="20" stroke="#7C6A52" strokeWidth="1.5"/>
+    <ellipse cx="27" cy="23" rx="12" ry="2.5" fill="#C8956C" opacity="0.6"/>
+    <path d="M19 15 Q21 11 19 7" stroke="#B8A898" strokeWidth="1.3" strokeLinecap="round" opacity="0.6"/>
+    <path d="M27 13 Q29 9 27 5" stroke="#B8A898" strokeWidth="1.3" strokeLinecap="round" opacity="0.6"/>
+    <path d="M35 15 Q37 11 35 7" stroke="#B8A898" strokeWidth="1.3" strokeLinecap="round" opacity="0.6"/>
+  </svg>
+);
 
+const StarDisplay = ({ value, size = 22 }) => (
+  <div style={{ display: "flex", gap: 2 }}>
+    {[1,2,3,4,5].map(i => {
+      const fill = Math.min(1, Math.max(0, value - (i-1)));
+      const pct = Math.round(fill * 100);
+      const id = `sg${i}${size}${Math.random().toString(36).slice(2,6)}`;
+      return (
+        <svg key={i} width={size} height={size} viewBox="0 0 24 24">
+          <defs>
+            <linearGradient id={id} x1="0%" x2="100%">
+              <stop offset={`${pct}%`} stopColor="#C8854A"/>
+              <stop offset={`${pct}%`} stopColor="transparent"/>
+            </linearGradient>
+          </defs>
+          <path d="M12 2L14.5 8.5L21.5 9L16 13.5L17.8 20.5L12 16.8L6.2 20.5L8 13.5L2.5 9L9.5 8.5Z"
+            fill={`url(#${id})`} stroke={fill > 0 ? "#9A5C28" : "#C8B89A"} strokeWidth="1.4" strokeLinejoin="round"/>
+        </svg>
+      );
+    })}
+  </div>
+);
+
+const tasteFields = [
+  { key: "acidity", label: "산미" },
+  { key: "sweetness", label: "단맛" },
+  { key: "bitterness", label: "쓴맛" },
+  { key: "body", label: "바디감" },
+];
+
+export default function CoffeeJournal() {
+  const [beans, setBeans] = useState([]);
+  const [brews, setBrews] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("write");
+  const [beanMode, setBeanMode] = useState("new");
+  const [selBean, setSelBean] = useState("");
+  const [expanded, setExpanded] = useState({});
+  const [msg, setMsg] = useState({ text: "", type: "" });
+  const fileRef = useRef();
   const today = new Date().toISOString().split("T")[0];
   const [form, setForm] = useState({
-    origin: "",
-    roastDate: today,
-    method: "핸드드립",
-    grind: 20,
-    dose: "",
-    water: "",
-    temp: "",
-    acidity: 3,
-    sweetness: 3,
-    bitterness: 3,
-    body: 3,
-    rating: 0,
-    note: "",
+    origin: "", roastDate: today, method: "핸드드립",
+    grind: 20, dose: "", water: "", temp: "", brewTime: "",
+    acidity: 3, sweetness: 3, bitterness: 3, body: 3,
+    rating: 0, note: "",
   });
 
-  // 데이터 변경 시 자동 저장
-  useEffect(() => { saveData(BEANS_KEY, beans); }, [beans]);
-  useEffect(() => { saveData(BREWS_KEY, brews); }, [brews]);
+  // 초기 로드
+  useEffect(() => {
+    (async () => {
+      try {
+        const b = await window.storage.get(BEANS_KEY);
+        const br = await window.storage.get(BREWS_KEY);
+        const loadedBeans = b ? JSON.parse(b.value) : [];
+        const loadedBrews = br ? JSON.parse(br.value) : [];
+        setBeans(loadedBeans);
+        setBrews(loadedBrews);
+        if (loadedBeans.length > 0) setBeanMode("existing");
+      } catch {}
+      setLoaded(true);
+    })();
+  }, []);
 
-  const beanKey = (name, roastDate) => `${(name || "").trim()}__${roastDate || ""}`;
-  const daysSince = (dateStr) => {
-    if (!dateStr) return null;
-    const d = new Date(dateStr);
-    return Math.round((new Date() - d) / (1000 * 60 * 60 * 24));
-  };
+  // beans 저장
+  useEffect(() => {
+    if (!loaded) return;
+    window.storage.set(BEANS_KEY, JSON.stringify(beans)).catch(() => {});
+  }, [beans, loaded]);
 
-  const updateForm = (field, value) => setForm((f) => ({ ...f, [field]: value }));
+  // brews 저장
+  useEffect(() => {
+    if (!loaded) return;
+    window.storage.set(BREWS_KEY, JSON.stringify(brews)).catch(() => {});
+  }, [brews, loaded]);
 
-  const showMsg = (text, type = "success") => {
-    setSaveMsg({ text, type });
-    setTimeout(() => setSaveMsg({ text: "", type: "" }), 2500);
-  };
+  const upd = (f, v) => setForm(p => ({ ...p, [f]: v }));
+  const flash = (text, type = "success") => { setMsg({ text, type }); setTimeout(() => setMsg({ text: "", type: "" }), 2500); };
 
   const handleSave = () => {
-    let originName, roastDate;
-
+    let name, roastDate;
     if (beanMode === "existing") {
-      if (!selectedBeanKey) {
-        showMsg("원두를 선택하거나 새로 등록해주세요", "error");
-        return;
-      }
-      const bean = beans.find((b) => beanKey(b.name, b.roastDate) === selectedBeanKey);
-      originName = bean.name;
-      roastDate = bean.roastDate;
+      if (!selBean) { flash("원두를 선택하거나 새로 등록해주세요", "error"); return; }
+      const b = beans.find(b => beanKey(b.name, b.roastDate) === selBean);
+      name = b.name; roastDate = b.roastDate;
     } else {
-      originName = form.origin.trim();
-      roastDate = form.roastDate || null;
-      if (!originName) {
-        showMsg("원두 이름을 입력해주세요", "error");
-        return;
-      }
-      const k = beanKey(originName, roastDate);
-      if (!beans.find((b) => beanKey(b.name, b.roastDate) === k)) {
-        setBeans((prev) => [{ name: originName, roastDate, createdAt: Date.now() }, ...prev]);
-      }
+      name = form.origin.trim(); roastDate = form.roastDate || null;
+      if (!name) { flash("원두 이름을 입력해주세요", "error"); return; }
+      const k = beanKey(name, roastDate);
+      if (!beans.find(b => beanKey(b.name, b.roastDate) === k))
+        setBeans(p => [{ name, roastDate, createdAt: Date.now() }, ...p]);
     }
-
     const entry = {
-      id: Date.now(),
-      date: new Date().toISOString(),
-      beanKey: beanKey(originName, roastDate),
-      origin: originName,
-      roastDate,
-      method: form.method,
-      grind: +form.grind,
-      dose: form.dose || null,
-      water: form.water || null,
-      temp: form.temp || null,
-      acidity: +form.acidity,
-      sweetness: +form.sweetness,
-      bitterness: +form.bitterness,
-      body: +form.body,
+      id: Date.now(), date: new Date().toISOString(),
+      beanKey: beanKey(name, roastDate), origin: name, roastDate,
+      method: form.method, grind: +form.grind,
+      dose: form.dose || null, water: form.water || null, temp: form.temp || null, brewTime: form.brewTime || null,
+      acidity: +form.acidity, sweetness: +form.sweetness,
+      bitterness: +form.bitterness, body: +form.body,
       rating: parseFloat(parseFloat(form.rating).toFixed(1)),
       note: form.note,
     };
-
-    setBrews((prev) => [entry, ...prev]);
-    setForm((f) => ({
-      ...f,
-      dose: "", water: "", temp: "",
-      acidity: 3, sweetness: 3, bitterness: 3, body: 3,
-      rating: 0, note: "", grind: 20,
-    }));
-    if (beanMode === "new") {
-      setForm((f) => ({ ...f, origin: "" }));
-      setBeanMode("existing");
-    }
-    showMsg("✓ 저장되었습니다");
+    setBrews(p => [entry, ...p]);
+    setForm(f => ({ ...f, dose:"", water:"", temp:"", brewTime:"", acidity:3, sweetness:3, bitterness:3, body:3, rating:0, note:"", grind:20 }));
+    if (beanMode === "new") { setForm(f => ({ ...f, origin:"" })); setBeanMode("existing"); }
+    flash("✓ 저장되었습니다");
   };
 
-  const handleDeleteBrew = (id) => {
-    if (!confirm("이 기록을 삭제할까요?")) return;
-    setBrews((prev) => prev.filter((b) => b.id !== id));
+  const delBrew = (id) => { if (!confirm("이 기록을 삭제할까요?")) return; setBrews(p => p.filter(b => b.id !== id)); };
+  const delBean = (key) => {
+    const cnt = brews.filter(b => b.beanKey === key).length;
+    if (!confirm(cnt > 0 ? `이 원두로 낸 ${cnt}개의 기록도 함께 삭제됩니다. 계속할까요?` : "이 원두를 삭제할까요?")) return;
+    setBeans(p => p.filter(b => beanKey(b.name, b.roastDate) !== key));
+    setBrews(p => p.filter(b => b.beanKey !== key));
   };
 
-  const handleDeleteBean = (key) => {
-    const relatedCount = brews.filter((b) => b.beanKey === key).length;
-    const msg = relatedCount > 0
-      ? `이 원두로 낸 ${relatedCount}개의 기록도 함께 삭제됩니다. 계속할까요?`
-      : "이 원두를 삭제할까요?";
-    if (!confirm(msg)) return;
-    setBeans((prev) => prev.filter((b) => beanKey(b.name, b.roastDate) !== key));
-    setBrews((prev) => prev.filter((b) => b.beanKey !== key));
-  };
-
-  const handleExport = () => {
-    const data = { beans, brews, exportedAt: new Date().toISOString(), version: 1 };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const exportData = () => {
+    const blob = new Blob([JSON.stringify({ beans, brews, exportedAt: new Date().toISOString() }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    const d = new Date();
-    a.download = `coffee_journal_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showMsg("✓ 백업 파일을 내보냈습니다");
+    const a = document.createElement("a"); a.href = url;
+    const d = new Date(); a.download = `coffee_${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}.json`;
+    a.click(); URL.revokeObjectURL(url); flash("✓ 내보내기 완료");
   };
 
-  const handleImport = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const importData = (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = (evt) => {
+    reader.onload = (ev) => {
       try {
-        const data = JSON.parse(evt.target.result);
-        if (Array.isArray(data.beans) && Array.isArray(data.brews)) {
-          if (brews.length > 0 || beans.length > 0) {
-            if (!confirm("현재 데이터를 덮어씁니다. 계속할까요?")) return;
-          }
-          setBeans(data.beans);
-          setBrews(data.brews);
-          showMsg("✓ 데이터를 불러왔습니다");
-        } else {
-          showMsg("올바른 파일 형식이 아닙니다", "error");
-        }
-      } catch (err) {
-        showMsg("파일을 읽을 수 없습니다", "error");
-      }
+        const data = JSON.parse(ev.target.result);
+        if (!Array.isArray(data.beans) || !Array.isArray(data.brews)) { flash("올바른 파일 형식이 아닙니다", "error"); return; }
+        if ((beans.length > 0 || brews.length > 0) && !confirm("현재 데이터를 덮어씁니다. 계속할까요?")) return;
+        setBeans(data.beans); setBrews(data.brews); flash("✓ 불러오기 완료");
+      } catch { flash("파일을 읽을 수 없습니다", "error"); }
     };
-    reader.readAsText(file);
-    e.target.value = "";
+    reader.readAsText(file); e.target.value = "";
   };
 
-  const StarRow = ({ value, size = 26 }) => (
-    <div className="flex gap-1 justify-center">
-      {[1, 2, 3, 4, 5].map((i) => {
-        const filled = Math.min(1, Math.max(0, value - (i - 1)));
-        const pct = Math.round(filled * 100);
-        const gradId = `star-grad-${i}-${size}`;
-        return (
-          <svg key={i} width={size} height={size} viewBox="0 0 24 24">
-            <defs>
-              <linearGradient id={gradId} x1="0%" x2="100%" y1="0%" y2="0%">
-                <stop offset={`${pct}%`} stopColor="#EF9F27" />
-                <stop offset={`${pct}%`} stopColor="transparent" />
-              </linearGradient>
-            </defs>
-            <path
-              d="M12 2 L14.5 8.5 L21.5 9 L16 13.5 L17.8 20.5 L12 16.8 L6.2 20.5 L8 13.5 L2.5 9 L9.5 8.5 Z"
-              fill={`url(#${gradId})`}
-              stroke={filled > 0 ? "#854F0B" : "#B4B2A9"}
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-            />
-          </svg>
-        );
-      })}
-    </div>
-  );
-
-  const groupedBeans = beans.map((bean) => {
+  const grouped = beans.map(bean => {
     const key = beanKey(bean.name, bean.roastDate);
-    const related = brews.filter((br) => br.beanKey === key);
-    const avgRating = related.length > 0
-      ? related.reduce((s, br) => s + (br.rating || 0), 0) / related.length
-      : null;
-    const bestBrew = related.length > 0
-      ? related.reduce((best, br) => (br.rating > (best?.rating ?? -1) ? br : best), null)
-      : null;
-    return { bean, key, brews: related, avgRating, bestBrew };
+    const related = brews.filter(b => b.beanKey === key);
+    const avg = related.length > 0 ? related.reduce((s, b) => s + (b.rating || 0), 0) / related.length : null;
+    const best = related.length > 0 ? related.reduce((best, b) => b.rating > (best?.rating ?? -1) ? b : best, null) : null;
+    return { bean, key, brews: related, avg, best };
   });
 
-  const TasteSlider = ({ field, label }) => (
-    <div className="flex items-center gap-3 mb-2">
-      <label className="text-xs text-stone-600 min-w-[3rem]">{label}</label>
-      <input
-        type="range" min="1" max="5" step="1"
-        value={form[field]}
-        onChange={(e) => updateForm(field, e.target.value)}
-        className="flex-1 accent-amber-700"
-      />
-      <span className="text-sm font-medium text-stone-800 min-w-[1rem] text-right">{form[field]}</span>
-    </div>
-  );
+  const S = {
+    wrap: { minHeight: "100vh", background: "linear-gradient(160deg,#FBF6EC 0%,#F5ECD8 60%,#EDE0C8 100%)", fontFamily: "'Georgia', 'Batang', serif", padding: "0 0 3rem" },
+    inner: { maxWidth: 560, margin: "0 auto", padding: "0 1.25rem" },
+    header: { textAlign: "center", padding: "2rem 0 1.25rem" },
+    title: { fontSize: 24, fontWeight: 500, color: "#4A3728", margin: "0.25rem 0 0.25rem", letterSpacing: "-0.01em" },
+    sub: { fontSize: 13, color: "#9A8070", fontFamily: "system-ui,sans-serif", margin: 0 },
+    topbar: { display: "flex", justifyContent: "flex-end", gap: 2, marginBottom: 8, fontFamily: "system-ui,sans-serif" },
+    tbtn: { background: "none", border: "none", fontSize: 12, color: "#8A7060", cursor: "pointer", padding: "4px 8px", borderRadius: 6, display: "flex", alignItems: "center", gap: 4 },
+    tabs: { display: "flex", borderBottom: "1px solid #D8C8B0", marginBottom: "1.5rem", fontFamily: "system-ui,sans-serif" },
+    tab: (active) => ({ flex: 1, padding: "10px 0", border: "none", background: "none", cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, color: active ? "#4A3728" : "#9A8070", fontWeight: active ? 600 : 400, borderBottom: active ? "2px solid #9A5C28" : "2px solid transparent", transition: "all 0.15s" }),
+    section: { fontFamily: "system-ui,sans-serif" },
+    label: { fontSize: 11, color: "#9A8070", letterSpacing: "0.08em", textTransform: "uppercase", display: "block", marginBottom: 6 },
+    input: { width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #D8C8B0", borderRadius: 10, fontSize: 14, background: "#FFFDF8", color: "#3A2818", outline: "none", fontFamily: "system-ui,sans-serif" },
+    select: { width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #D8C8B0", borderRadius: 10, fontSize: 14, background: "#FFFDF8", color: "#3A2818", outline: "none", fontFamily: "system-ui,sans-serif" },
+    grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+    grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+    block: { marginBottom: "1.25rem" },
+    modebtn: (active) => ({ flex: 1, padding: "8px 0", borderRadius: 10, border: active ? "1.5px solid #9A5C28" : "1px solid #D8C8B0", background: active ? "#F5E8D4" : "transparent", color: active ? "#6A3818" : "#9A8070", fontSize: 13, cursor: "pointer", fontWeight: active ? 600 : 400, transition: "all 0.15s", fontFamily: "system-ui,sans-serif" }),
+    savebtn: { width: "100%", padding: "13px 0", background: "#F5E8D4", border: "1.5px solid #9A5C28", borderRadius: 12, color: "#5A2808", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "system-ui,sans-serif", letterSpacing: "0.02em" },
+    flashbox: (type) => ({ textAlign: "center", fontSize: 13, padding: "8px 12px", borderRadius: 8, marginBottom: 12, background: type === "error" ? "#FDE8E8" : "#E8F5E8", color: type === "error" ? "#922" : "#282", fontFamily: "system-ui,sans-serif" }),
+    card: { background: "#FFFDF8", border: "1px solid #E0D0B8", borderRadius: 14, padding: "13px 15px", marginBottom: 10, boxShadow: "0 1px 4px rgba(160,120,60,0.06)" },
+    beanCard: { background: "#F8F0E4", border: "1px solid #E0D0B8", borderRadius: 14, padding: "13px 15px", marginBottom: 10 },
+    emptywrap: { textAlign: "center", padding: "3.5rem 1rem", color: "#B0A090" },
+    footer: { textAlign: "center", fontSize: 11, color: "#C0B0A0", marginTop: "2rem", paddingTop: "1rem", borderTop: "1px solid #E8DAC8", fontFamily: "system-ui,sans-serif" },
+  };
 
   const BrewCard = ({ brew }) => {
     const d = new Date(brew.date);
-    const dateStr = `${d.getMonth() + 1}월 ${d.getDate()}일`;
-    const elapsed = brew.roastDate ? daysSince(brew.roastDate) : null;
+    const elapsed = daysSince(brew.roastDate);
     return (
-      <div className="bg-white border border-stone-200 rounded-xl p-4 mb-2.5 shadow-sm">
-        <div className="flex justify-between items-start mb-2">
-          <div className="flex-1 min-w-0">
-            <p className="text-[15px] font-medium text-stone-800 truncate">{brew.origin}</p>
-            <p className="text-xs text-stone-500 mt-0.5">
-              {dateStr} · {brew.method} · 분쇄도 {brew.grind}
-              {elapsed !== null && ` · 로스팅 후 ${elapsed}일`}
-            </p>
+      <div style={S.card}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 15, fontWeight: 500, color: "#3A2818", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{brew.origin}</div>
+            <div style={{ fontSize: 12, color: "#9A8070", marginTop: 2 }}>
+              {d.getMonth()+1}월 {d.getDate()}일 · {brew.method} · 분쇄도 {brew.grind}{elapsed !== null ? ` · 로스팅 후 ${elapsed}일` : ""}
+            </div>
           </div>
-          <div className="flex items-center gap-2 ml-2">
-            <span className="text-sm text-amber-800 font-medium whitespace-nowrap">★ {brew.rating.toFixed(1)}</span>
-            <button onClick={() => handleDeleteBrew(brew.id)} className="text-stone-400 hover:text-red-500 transition-colors" aria-label="삭제">
-              <Trash2 size={14} />
-            </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
+            <span style={{ fontSize: 14, color: "#9A5C28", fontWeight: 600, whiteSpace: "nowrap" }}>★ {brew.rating.toFixed(1)}</span>
+            <button onClick={() => delBrew(brew.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#C0A890", padding: 2, fontSize: 13 }} title="삭제">✕</button>
           </div>
         </div>
-        <div className="text-xs text-stone-500 mb-2">
-          {brew.dose ? `${brew.dose}g` : "-"} / {brew.water ? `${brew.water}ml` : "-"} / {brew.temp ? `${brew.temp}°C` : "-"}
-          <span className="text-stone-400 ml-2">
-            산미 {brew.acidity} · 단맛 {brew.sweetness} · 쓴맛 {brew.bitterness} · 바디 {brew.body}
-          </span>
+        <div style={{ fontSize: 12, color: "#9A8070", marginBottom: brew.note ? 8 : 0 }}>
+          {brew.dose ? `${brew.dose}g` : "−"} / {brew.water ? `${brew.water}ml` : "−"} / {brew.temp ? `${brew.temp}°C` : "−"} / {brew.brewTime ? `${brew.brewTime}초` : "−"}
+          <span style={{ color: "#B0A090", marginLeft: 8 }}>산미 {brew.acidity} · 단맛 {brew.sweetness} · 쓴맛 {brew.bitterness} · 바디 {brew.body}</span>
         </div>
         {brew.note && (
-          <p className="text-sm text-stone-700 pt-2 border-t border-dashed border-stone-200 italic leading-relaxed">{brew.note}</p>
+          <div style={{ fontSize: 13, color: "#5A4838", paddingTop: 8, borderTop: "1px dashed #E0D0B8", fontStyle: "italic", lineHeight: 1.65, fontFamily: "Georgia,serif" }}>{brew.note}</div>
         )}
       </div>
     );
   };
 
+  if (!loaded) return (
+    <div style={{ ...S.wrap, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ textAlign: "center", color: "#9A8070", fontFamily: "system-ui,sans-serif", fontSize: 14 }}>불러오는 중...</div>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen" style={{
-      background: "linear-gradient(180deg, #FAF5EC 0%, #F5EDD8 100%)",
-      fontFamily: '"Noto Serif KR", Georgia, serif',
-    }}>
-      <div className="max-w-2xl mx-auto px-5 py-8">
-        <div className="text-center mb-8">
-          <svg width="64" height="64" viewBox="0 0 56 56" className="mx-auto mb-2">
-            <ellipse cx="28" cy="46" rx="18" ry="2.5" fill="#D3D1C7" opacity="0.4" />
-            <path d="M12 20 L12 36 Q12 44 20 44 L34 44 Q42 44 42 36 L42 20 Z" fill="none" stroke="#5F5E5A" strokeWidth="1.5" strokeLinejoin="round" />
-            <path d="M42 24 Q50 24 50 30 Q50 36 42 36" fill="none" stroke="#5F5E5A" strokeWidth="1.5" strokeLinecap="round" />
-            <path d="M12 20 L42 20" stroke="#5F5E5A" strokeWidth="1.5" />
-            <ellipse cx="27" cy="26" rx="13" ry="3" fill="#FAEEDA" opacity="0.7" />
-            <path d="M20 14 Q22 10 20 6" fill="none" stroke="#B4B2A9" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
-            <path d="M27 12 Q29 8 27 4" fill="none" stroke="#B4B2A9" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
-            <path d="M34 14 Q36 10 34 6" fill="none" stroke="#B4B2A9" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
-          </svg>
-          <h1 className="text-2xl font-medium tracking-tight text-stone-800">커피 추출 일지</h1>
-          <p className="text-sm text-stone-500 mt-1" style={{ fontFamily: "system-ui, sans-serif" }}>오늘의 한 잔을 기록합니다</p>
+    <div style={S.wrap}>
+      <div style={S.inner}>
+        <div style={S.header}>
+          <CoffeeCupIcon size={56} />
+          <div style={S.title}>커피 추출 일지</div>
+          <div style={S.sub}>오늘의 한 잔을 기록합니다</div>
         </div>
 
-        <div className="flex gap-2 mb-4 justify-end" style={{ fontFamily: "system-ui, sans-serif" }}>
-          <button onClick={handleExport} className="flex items-center gap-1.5 text-xs text-stone-600 hover:text-amber-800 transition-colors px-2 py-1">
-            <Download size={13} /> 백업 내보내기
-          </button>
-          <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-1.5 text-xs text-stone-600 hover:text-amber-800 transition-colors px-2 py-1">
-            <Upload size={13} /> 복원
-          </button>
-          <input ref={fileInputRef} type="file" accept=".json" onChange={handleImport} className="hidden" />
+        <div style={S.topbar}>
+          <button style={S.tbtn} onClick={exportData}>↓ 내보내기</button>
+          <button style={S.tbtn} onClick={() => fileRef.current?.click()}>↑ 불러오기</button>
+          <input ref={fileRef} type="file" accept=".json" onChange={importData} style={{ display: "none" }} />
         </div>
 
-        <div className="flex gap-1 border-b border-stone-200 mb-6" style={{ fontFamily: "system-ui, sans-serif" }}>
+        {msg.text && <div style={S.flashbox(msg.type)}>{msg.text}</div>}
+
+        <div style={S.tabs}>
           {[
-            { key: "write", label: "새 기록", icon: Plus },
-            { key: "list", label: "전체 기록", icon: List, count: brews.length },
-            { key: "beans", label: "원두별", icon: Package, count: beans.length },
-          ].map((t) => {
-            const Icon = t.icon;
-            const active = activeTab === t.key;
-            return (
-              <button key={t.key} onClick={() => setActiveTab(t.key)}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm transition-all ${
-                  active ? "text-stone-800 font-medium border-b-2 border-amber-700"
-                         : "text-stone-500 border-b-2 border-transparent hover:text-stone-700"
-                }`}>
-                <Icon size={14} />
-                {t.label}
-                {t.count !== undefined && <span className="text-xs text-stone-400">({t.count})</span>}
-              </button>
-            );
-          })}
+            { key: "write", label: "새 기록" },
+            { key: "list", label: `전체 기록 (${brews.length})` },
+            { key: "beans", label: `원두별 (${beans.length})` },
+          ].map(t => (
+            <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>{t.label}</button>
+          ))}
         </div>
 
-        {saveMsg.text && (
-          <div className={`text-center text-sm mb-4 py-2 px-3 rounded-lg ${
-            saveMsg.type === "error" ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"
-          }`} style={{ fontFamily: "system-ui, sans-serif" }}>
-            {saveMsg.text}
-          </div>
-        )}
-
-        {activeTab === "write" && (
-          <div style={{ fontFamily: "system-ui, sans-serif" }}>
-            <div className="mb-5">
-              <p className="text-xs text-stone-400 tracking-wider uppercase mb-2">원두</p>
-              <div className="flex gap-1.5 mb-2.5">
-                <button onClick={() => setBeanMode("existing")} disabled={beans.length === 0}
-                  className={`flex-1 py-2 text-sm rounded-lg transition-all ${
-                    beanMode === "existing" ? "bg-amber-100 border border-amber-700 text-amber-900 font-medium"
-                                             : "bg-transparent border border-stone-300 text-stone-500"
-                  } ${beans.length === 0 ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}>
-                  저장된 원두
-                </button>
-                <button onClick={() => setBeanMode("new")}
-                  className={`flex-1 py-2 text-sm rounded-lg transition-all cursor-pointer ${
-                    beanMode === "new" ? "bg-amber-100 border border-amber-700 text-amber-900 font-medium"
-                                       : "bg-transparent border border-stone-300 text-stone-500"
-                  }`}>
-                  새 원두 등록
-                </button>
+        {tab === "write" && (
+          <div style={S.section}>
+            <div style={S.block}>
+              <span style={S.label}>원두</span>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <button style={S.modebtn(beanMode === "existing")} disabled={beans.length === 0}
+                  onClick={() => setBeanMode("existing")}>저장된 원두</button>
+                <button style={S.modebtn(beanMode === "new")} onClick={() => setBeanMode("new")}>새 원두 등록</button>
               </div>
-
               {beanMode === "existing" ? (
-                <select value={selectedBeanKey} onChange={(e) => setSelectedBeanKey(e.target.value)}
-                  className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white text-stone-800 focus:outline-none focus:border-amber-700">
+                <select style={S.select} value={selBean} onChange={e => setSelBean(e.target.value)}>
                   <option value="">원두를 선택하세요</option>
-                  {beans.map((b) => {
+                  {beans.map(b => {
                     const elapsed = daysSince(b.roastDate);
-                    return (
-                      <option key={beanKey(b.name, b.roastDate)} value={beanKey(b.name, b.roastDate)}>
-                        {b.name} · {b.roastDate || "날짜 미기재"}{elapsed !== null && ` (로스팅 후 ${elapsed}일)`}
-                      </option>
-                    );
+                    return <option key={beanKey(b.name, b.roastDate)} value={beanKey(b.name, b.roastDate)}>
+                      {b.name} · {b.roastDate || "날짜 미기재"}{elapsed !== null ? ` (${elapsed}일 경과)` : ""}
+                    </option>;
                   })}
                 </select>
               ) : (
-                <div className="grid grid-cols-2 gap-2.5">
+                <div style={S.grid2}>
                   <div>
-                    <label className="text-xs text-stone-600 block mb-1">원두 이름</label>
-                    <input type="text" value={form.origin} onChange={(e) => updateForm("origin", e.target.value)}
-                      placeholder="예: 에티오피아 예가체프"
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700" />
+                    <label style={{ ...S.label, marginBottom: 4 }}>원두 이름</label>
+                    <input style={S.input} type="text" value={form.origin} onChange={e => upd("origin", e.target.value)} placeholder="예: 에티오피아 예가체프" />
                   </div>
                   <div>
-                    <label className="text-xs text-stone-600 block mb-1">로스팅 날짜</label>
-                    <input type="date" value={form.roastDate} onChange={(e) => updateForm("roastDate", e.target.value)}
-                      className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700" />
+                    <label style={{ ...S.label, marginBottom: 4 }}>로스팅 날짜</label>
+                    <input style={S.input} type="date" value={form.roastDate} onChange={e => upd("roastDate", e.target.value)} />
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="mb-5">
-              <p className="text-xs text-stone-400 tracking-wider uppercase mb-2">추출 조건</p>
-              <div className="grid grid-cols-2 gap-2.5 mb-2.5">
+            <div style={S.block}>
+              <span style={S.label}>추출 조건</span>
+              <div style={{ ...S.grid2, marginBottom: 10 }}>
                 <div>
-                  <label className="text-xs text-stone-600 block mb-1">추출 방법</label>
-                  <select value={form.method} onChange={(e) => updateForm("method", e.target.value)}
-                    className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700">
-                    {["핸드드립", "에스프레소", "프렌치프레스", "에어로프레스", "모카포트", "콜드브루"].map(m => (
-                      <option key={m}>{m}</option>
-                    ))}
+                  <label style={{ ...S.label, marginBottom: 4 }}>추출 방법</label>
+                  <select style={S.select} value={form.method} onChange={e => upd("method", e.target.value)}>
+                    {["핸드드립","에스프레소","프렌치프레스","에어로프레스","모카포트","콜드브루"].map(m => <option key={m}>{m}</option>)}
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-stone-600 block mb-1">
-                    분쇄도 <span className="text-amber-800 font-medium">{form.grind}</span>
-                    <span className="text-stone-400 text-[11px]"> / 40</span>
+                  <label style={{ ...S.label, marginBottom: 4 }}>
+                    분쇄도 <span style={{ color: "#9A5C28", fontWeight: 600 }}>{form.grind}</span>
+                    <span style={{ color: "#B0A090", fontSize: 10 }}> / 40</span>
                   </label>
                   <input type="range" min="0" max="40" step="1" value={form.grind}
-                    onChange={(e) => updateForm("grind", e.target.value)}
-                    className="w-full accent-amber-700 mt-2" />
+                    onChange={e => upd("grind", e.target.value)}
+                    style={{ width: "100%", accentColor: "#9A5C28", marginTop: 6 }} />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-2.5">
-                <div>
-                  <label className="text-xs text-stone-600 block mb-1">원두량 (g)</label>
-                  <input type="number" step="0.1" value={form.dose}
-                    onChange={(e) => updateForm("dose", e.target.value)} placeholder="18"
-                    className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700" />
-                </div>
-                <div>
-                  <label className="text-xs text-stone-600 block mb-1">물 (ml)</label>
-                  <input type="number" value={form.water}
-                    onChange={(e) => updateForm("water", e.target.value)} placeholder="300"
-                    className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700" />
-                </div>
-                <div>
-                  <label className="text-xs text-stone-600 block mb-1">온도 (°C)</label>
-                  <input type="number" step="0.1" value={form.temp}
-                    onChange={(e) => updateForm("temp", e.target.value)} placeholder="92"
-                    className="w-full px-3 py-2 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700" />
-                </div>
+              <div style={{ ...S.grid3, gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
+                {[["dose","원두량 (g)","18","0.1"],["water","물 (ml)","300","1"],["temp","온도 (°C)","92","0.1"],["brewTime","완료 시간 (초)","180","1"]].map(([f,l,ph,step]) => (
+                  <div key={f}>
+                    <label style={{ ...S.label, marginBottom: 4 }}>{l}</label>
+                    <input style={S.input} type="number" step={step} value={form[f]} onChange={e => upd(f, e.target.value)} placeholder={ph} />
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="mb-5">
-              <p className="text-xs text-stone-400 tracking-wider uppercase mb-2">맛 평가</p>
-              <TasteSlider field="acidity" label="산미" />
-              <TasteSlider field="sweetness" label="단맛" />
-              <TasteSlider field="bitterness" label="쓴맛" />
-              <TasteSlider field="body" label="바디감" />
+            <div style={S.block}>
+              <span style={S.label}>맛 평가</span>
+              {tasteFields.map(({ key, label }) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, color: "#7A6858", minWidth: 44 }}>{label}</span>
+                  <input type="range" min="1" max="5" step="1" value={form[key]}
+                    onChange={e => upd(key, e.target.value)}
+                    style={{ flex: 1, accentColor: "#9A5C28" }} />
+                  <span style={{ fontSize: 13, fontWeight: 500, color: "#3A2818", minWidth: 14, textAlign: "right" }}>{form[key]}</span>
+                </div>
+              ))}
             </div>
 
-            <div className="mb-5">
-              <p className="text-xs text-stone-400 tracking-wider uppercase mb-2">오늘의 한 잔</p>
-              <div className="bg-stone-100 p-4 rounded-lg">
-                <div className="mb-3"><StarRow value={parseFloat(form.rating)} /></div>
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xs text-stone-400">0.0</span>
+            <div style={S.block}>
+              <span style={S.label}>오늘의 한 잔</span>
+              <div style={{ background: "#F2E8D8", borderRadius: 12, padding: "12px 14px" }}>
+                <div style={{ display: "flex", justifyContent: "center", marginBottom: 10 }}>
+                  <StarDisplay value={parseFloat(form.rating)} size={28} />
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: "#B0A090" }}>0.0</span>
                   <input type="range" min="0" max="5" step="0.1" value={form.rating}
-                    onChange={(e) => updateForm("rating", e.target.value)}
-                    className="flex-1 accent-amber-700" />
-                  <span className="text-xs text-stone-400">5.0</span>
-                  <span className="text-base font-medium text-amber-800 min-w-[2rem] text-right">
+                    onChange={e => upd("rating", e.target.value)}
+                    style={{ flex: 1, accentColor: "#9A5C28" }} />
+                  <span style={{ fontSize: 11, color: "#B0A090" }}>5.0</span>
+                  <span style={{ fontSize: 16, fontWeight: 600, color: "#9A5C28", minWidth: 30, textAlign: "right" }}>
                     {parseFloat(form.rating).toFixed(1)}
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="mb-5">
-              <p className="text-xs text-stone-400 tracking-wider uppercase mb-2">감상 노트</p>
-              <textarea rows="3" value={form.note} onChange={(e) => updateForm("note", e.target.value)}
+            <div style={S.block}>
+              <span style={S.label}>감상 노트</span>
+              <textarea
+                value={form.note} onChange={e => upd("note", e.target.value)}
                 placeholder="향, 맛, 여운... 오늘의 커피는 어땠나요?"
-                className="w-full px-3 py-2.5 border border-stone-300 rounded-lg text-sm bg-white focus:outline-none focus:border-amber-700 resize-y" />
+                rows={3}
+                style={{ ...S.input, resize: "vertical", lineHeight: 1.6, fontFamily: "Georgia,serif" }}
+              />
             </div>
 
-            <button onClick={handleSave}
-              className="w-full py-3 bg-amber-100 border border-amber-700 text-amber-900 rounded-lg font-medium hover:bg-amber-200 transition-colors">
-              기록 저장하기
-            </button>
+            <button style={S.savebtn} onClick={handleSave}>기록 저장하기</button>
           </div>
         )}
 
-        {activeTab === "list" && (
-          <div style={{ fontFamily: "system-ui, sans-serif" }}>
+        {tab === "list" && (
+          <div style={S.section}>
             {brews.length === 0 ? (
-              <div className="text-center py-16 text-stone-400">
-                <Coffee size={32} className="mx-auto mb-3 opacity-40" />
-                <p className="text-sm">아직 기록이 없습니다</p>
-                <p className="text-xs mt-1">첫 잔을 기록해보세요</p>
+              <div style={S.emptywrap}>
+                <CoffeeCupIcon size={36} />
+                <div style={{ fontSize: 14, marginTop: 12 }}>아직 기록이 없습니다</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>첫 잔을 기록해보세요</div>
               </div>
-            ) : (
-              brews.map((b) => <BrewCard key={b.id} brew={b} />)
-            )}
+            ) : brews.map(b => <BrewCard key={b.id} brew={b} />)}
           </div>
         )}
 
-        {activeTab === "beans" && (
-          <div style={{ fontFamily: "system-ui, sans-serif" }}>
+        {tab === "beans" && (
+          <div style={S.section}>
             {beans.length === 0 ? (
-              <div className="text-center py-16 text-stone-400">
-                <Package size={32} className="mx-auto mb-3 opacity-40" />
-                <p className="text-sm">등록된 원두가 없습니다</p>
-                <p className="text-xs mt-1">첫 원두를 등록해보세요</p>
+              <div style={S.emptywrap}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>☕</div>
+                <div style={{ fontSize: 14 }}>등록된 원두가 없습니다</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>새 원두를 등록해보세요</div>
               </div>
-            ) : (
-              groupedBeans.map((g) => {
-                const elapsed = g.bean.roastDate ? daysSince(g.bean.roastDate) : null;
-                const isExpanded = expandedBeans[g.key];
-                return (
-                  <div key={g.key} className="bg-stone-100 rounded-xl p-4 mb-2.5">
-                    <div className="flex justify-between items-start gap-2">
-                      <div className="flex-1 cursor-pointer min-w-0"
-                        onClick={() => setExpandedBeans((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}>
-                        <p className="text-[15px] font-medium text-stone-800 truncate">{g.bean.name}</p>
-                        <p className="text-xs text-stone-500 mt-0.5">
-                          {g.bean.roastDate || "날짜 미기재"}
-                          {elapsed !== null && ` · 로스팅 후 ${elapsed}일`}
-                          {` · ${g.brews.length}회 추출`}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <p className="text-[11px] text-stone-400">평균</p>
-                          <p className="text-base text-amber-800 font-medium mt-0.5">
-                            ★ {g.avgRating !== null ? g.avgRating.toFixed(1) : "—"}
-                          </p>
-                        </div>
-                        <button onClick={() => handleDeleteBean(g.key)}
-                          className="text-stone-400 hover:text-red-500 transition-colors" aria-label="원두 삭제">
-                          <Trash2 size={14} />
-                        </button>
-                        <button onClick={() => setExpandedBeans((prev) => ({ ...prev, [g.key]: !prev[g.key] }))}
-                          className="text-stone-400 hover:text-stone-600">
-                          {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                        </button>
+            ) : grouped.map(g => {
+              const elapsed = daysSince(g.bean.roastDate);
+              const isOpen = expanded[g.key];
+              return (
+                <div key={g.key} style={S.beanCard}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ flex: 1, cursor: "pointer", minWidth: 0 }}
+                      onClick={() => setExpanded(p => ({ ...p, [g.key]: !p[g.key] }))}>
+                      <div style={{ fontSize: 15, fontWeight: 500, color: "#3A2818", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.bean.name}</div>
+                      <div style={{ fontSize: 12, color: "#9A8070", marginTop: 2 }}>
+                        {g.bean.roastDate || "날짜 미기재"}{elapsed !== null ? ` · 로스팅 후 ${elapsed}일` : ""} · {g.brews.length}회 추출
                       </div>
                     </div>
-                    {g.bestBrew && (
-                      <p className="text-[11px] text-stone-400 mt-2.5 pt-2.5 border-t border-dashed border-stone-300">
-                        최고 평점 조합: <span className="text-stone-600">
-                          분쇄도 {g.bestBrew.grind} · {g.bestBrew.method} · {g.bestBrew.temp || "-"}°C · ★ {g.bestBrew.rating.toFixed(1)}
-                        </span>
-                      </p>
-                    )}
-                    {isExpanded && (
-                      <div className="mt-3 pt-3 border-t border-stone-200">
-                        {g.brews.length > 0 ? (
-                          g.brews.map((b) => <BrewCard key={b.id} brew={b} />)
-                        ) : (
-                          <p className="text-xs text-stone-400 text-center py-4">이 원두로 아직 추출한 기록이 없습니다</p>
-                        )}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 11, color: "#B0A090" }}>평균</div>
+                        <div style={{ fontSize: 16, color: "#9A5C28", fontWeight: 600 }}>
+                          ★ {g.avg !== null ? g.avg.toFixed(1) : "—"}
+                        </div>
                       </div>
-                    )}
+                      <button onClick={() => delBean(g.key)}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "#C0A890", fontSize: 13, padding: 2 }} title="원두 삭제">✕</button>
+                      <button onClick={() => setExpanded(p => ({ ...p, [g.key]: !p[g.key] }))}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "#9A8070", fontSize: 16, padding: 2 }}>
+                        {isOpen ? "▲" : "▼"}
+                      </button>
+                    </div>
                   </div>
-                );
-              })
-            )}
+                  {g.best && (
+                    <div style={{ fontSize: 11, color: "#9A8070", marginTop: 8, paddingTop: 8, borderTop: "1px dashed #D8C8A8" }}>
+                      최고 평점 조합: <span style={{ color: "#6A4828" }}>분쇄도 {g.best.grind} · {g.best.method} · {g.best.temp || "−"}°C · ★ {g.best.rating.toFixed(1)}</span>
+                    </div>
+                  )}
+                  {isOpen && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid #E8D8C0" }}>
+                      {g.brews.length > 0 ? g.brews.map(b => <BrewCard key={b.id} brew={b} />) : (
+                        <div style={{ fontSize: 12, color: "#B0A090", textAlign: "center", padding: "1rem 0" }}>이 원두로 아직 추출한 기록이 없습니다</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 
-        <div className="text-center text-xs text-stone-400 mt-8 pt-4 border-t border-stone-200"
-          style={{ fontFamily: "system-ui, sans-serif" }}>
-          ☕ 데이터는 이 기기에 안전하게 저장됩니다
-        </div>
+        <div style={S.footer}>☕ 데이터는 이 기기에 자동 저장됩니다</div>
       </div>
     </div>
   );
