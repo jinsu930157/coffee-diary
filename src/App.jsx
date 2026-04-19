@@ -3,6 +3,9 @@ import { useState, useEffect, useRef } from "react";
 const BEANS_KEY = "cj_beans_v2";
 const BREWS_KEY = "cj_brews_v2";
 
+const load = (key) => { try { return JSON.parse(localStorage.getItem(key) || "[]"); } catch { return []; } };
+const save = (key, data) => { try { localStorage.setItem(key, JSON.stringify(data)); } catch {} };
+
 const beanKey = (name, roastDate) => `${(name || "").trim()}__${roastDate || ""}`;
 const daysSince = (d) => d ? Math.round((Date.now() - new Date(d)) / 86400000) : null;
 
@@ -49,9 +52,8 @@ const tasteFields = [
 ];
 
 export default function CoffeeJournal() {
-  const [beans, setBeans] = useState([]);
-  const [brews, setBrews] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+  const [beans, setBeans] = useState(() => load(BEANS_KEY));
+  const [brews, setBrews] = useState(() => load(BREWS_KEY));
   const [tab, setTab] = useState("write");
   const [beanMode, setBeanMode] = useState("new");
   const [selBean, setSelBean] = useState("");
@@ -66,33 +68,9 @@ export default function CoffeeJournal() {
     rating: 0, note: "",
   });
 
-  // 초기 로드
-  useEffect(() => {
-    (async () => {
-      try {
-        const b = await window.storage.get(BEANS_KEY);
-        const br = await window.storage.get(BREWS_KEY);
-        const loadedBeans = b ? JSON.parse(b.value) : [];
-        const loadedBrews = br ? JSON.parse(br.value) : [];
-        setBeans(loadedBeans);
-        setBrews(loadedBrews);
-        if (loadedBeans.length > 0) setBeanMode("existing");
-      } catch {}
-      setLoaded(true);
-    })();
-  }, []);
-
-  // beans 저장
-  useEffect(() => {
-    if (!loaded) return;
-    window.storage.set(BEANS_KEY, JSON.stringify(beans)).catch(() => {});
-  }, [beans, loaded]);
-
-  // brews 저장
-  useEffect(() => {
-    if (!loaded) return;
-    window.storage.set(BREWS_KEY, JSON.stringify(brews)).catch(() => {});
-  }, [brews, loaded]);
+  useEffect(() => { save(BEANS_KEY, beans); }, [beans]);
+  useEffect(() => { save(BREWS_KEY, brews); }, [brews]);
+  useEffect(() => { if (beans.length > 0 && beanMode === "new" && !form.origin) setBeanMode("existing"); }, [beans.length]);
 
   const upd = (f, v) => setForm(p => ({ ...p, [f]: v }));
   const flash = (text, type = "success") => { setMsg({ text, type }); setTimeout(() => setMsg({ text: "", type: "" }), 2500); };
@@ -180,6 +158,7 @@ export default function CoffeeJournal() {
     select: { width: "100%", boxSizing: "border-box", padding: "9px 12px", border: "1px solid #D8C8B0", borderRadius: 10, fontSize: 14, background: "#FFFDF8", color: "#3A2818", outline: "none", fontFamily: "system-ui,sans-serif" },
     grid2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
     grid3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+    grid4: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 10 },
     block: { marginBottom: "1.25rem" },
     modebtn: (active) => ({ flex: 1, padding: "8px 0", borderRadius: 10, border: active ? "1.5px solid #9A5C28" : "1px solid #D8C8B0", background: active ? "#F5E8D4" : "transparent", color: active ? "#6A3818" : "#9A8070", fontSize: 13, cursor: "pointer", fontWeight: active ? 600 : 400, transition: "all 0.15s", fontFamily: "system-ui,sans-serif" }),
     savebtn: { width: "100%", padding: "13px 0", background: "#F5E8D4", border: "1.5px solid #9A5C28", borderRadius: 12, color: "#5A2808", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "system-ui,sans-serif", letterSpacing: "0.02em" },
@@ -217,12 +196,6 @@ export default function CoffeeJournal() {
       </div>
     );
   };
-
-  if (!loaded) return (
-    <div style={{ ...S.wrap, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <div style={{ textAlign: "center", color: "#9A8070", fontFamily: "system-ui,sans-serif", fontSize: 14 }}>불러오는 중...</div>
-    </div>
-  );
 
   return (
     <div style={S.wrap}>
@@ -303,7 +276,7 @@ export default function CoffeeJournal() {
                     style={{ width: "100%", accentColor: "#9A5C28", marginTop: 6 }} />
                 </div>
               </div>
-              <div style={{ ...S.grid3, gridTemplateColumns: "1fr 1fr 1fr 1fr" }}>
+              <div style={S.grid4}>
                 {[["dose","원두량 (g)","18","0.1"],["water","물 (ml)","300","1"],["temp","온도 (°C)","92","0.1"],["brewTime","완료 시간 (초)","180","1"]].map(([f,l,ph,step]) => (
                   <div key={f}>
                     <label style={{ ...S.label, marginBottom: 4 }}>{l}</label>
